@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+.venv/
+.env
+
+# IDEs
+.vscode/
+.idea/
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Build & Test artifacts
+dist/
+build/
+*.egg-info/
+htmlcov/
+.pytest_cache/
+
+# Output directories
+/output/
+/transcriptions/
+recording.wav
+*.log
