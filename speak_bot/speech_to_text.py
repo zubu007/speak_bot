@@ -3,17 +3,17 @@ import io
 import wave
 
 import numpy as np
-import whisper
+from faster_whisper import WhisperModel
 
 
 def transcribe_audio(
     audio_data: np.ndarray,
     samplerate: int,
-    model_name: str = "base",
+    model_name: str = "tiny",
     language: str | None = None,
     verbose: bool = True,
 ) -> str:
-    """Transcribe audio data using OpenAI Whisper.
+    """Transcribe audio data using faster-whisper.
     
     Args:
         audio_data: int16 numpy array
@@ -26,8 +26,8 @@ def transcribe_audio(
         Transcribed text
     """
     if verbose:
-        print(f"Loading Whisper model: {model_name}")
-    model = whisper.load_model(model_name)
+        print(f"Loading faster-whisper model: {model_name}")
+    model = WhisperModel(model_name)
     
     # Convert int16 to float32 normalized to [-1, 1]
     audio_float = audio_data.astype(np.float32) / 32768.0
@@ -50,13 +50,14 @@ def transcribe_audio(
     if verbose:
         print("Transcribing audio...")
     
-    result = model.transcribe(
+    # faster-whisper returns (segments, info) where segments is an iterator
+    segments, info = model.transcribe(
         audio_float,
         language=language,
-        fp16=False,  # Use fp32 for better compatibility
     )
     
-    text = result["text"].strip()
+    # Convert segments iterator to text
+    text = "".join([segment.text for segment in segments]).strip()
     
     if verbose:
         print(f"Transcription complete: {len(text)} characters")
@@ -66,11 +67,11 @@ def transcribe_audio(
 
 def transcribe_wav_file(
     wav_path: str,
-    model_name: str = "base",
+    model_name: str = "tiny",
     language: str | None = None,
     verbose: bool = True,
 ) -> str:
-    """Transcribe a WAV file using Whisper.
+    """Transcribe a WAV file using faster-whisper.
     
     Args:
         wav_path: Path to WAV file
@@ -94,7 +95,7 @@ def transcribe_wav_file(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Transcribe WAV file to text using Whisper.")
+    parser = argparse.ArgumentParser(description="Transcribe WAV file to text using faster-whisper.")
     parser.add_argument(
         "input",
         help="Input WAV file path",
@@ -108,9 +109,9 @@ def parse_args():
     parser.add_argument(
         "-m",
         "--model",
-        default="base",
+        default="tiny",
         choices=["tiny", "base", "small", "medium", "large"],
-        help="Whisper model size (default: base)",
+        help="faster-whisper model size (default: tiny)",
     )
     parser.add_argument(
         "-l",

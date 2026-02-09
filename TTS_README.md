@@ -24,7 +24,7 @@ python text_to_speech.py "Hello, this is a test"
 python text_to_speech.py "Hello world" -o my_audio.wav
 
 # Use a different model
-python text_to_speech.py "Hello" -m tts_models/en_US-amy-low.onnx
+python text_to_speech.py "Hello" -m tts_models/jarvis-medium.onnx
 ```
 
 ### Python API
@@ -38,7 +38,7 @@ from text_to_speech import text_to_speech, PiperTTS
 output_file = text_to_speech("Hello, world!", output_path="output/hello.wav")
 
 # Using the class for more control
-tts = PiperTTS(model_path="tts_models/en_US-amy-low.onnx")
+tts = PiperTTS(model_path="tts_models/jarvis-medium.onnx")
 audio_array, sample_rate = tts.synthesize(
     text="This is a longer text to convert to speech",
     output_path="output/speech.wav"
@@ -54,13 +54,13 @@ audio_array, sample_rate = tts.synthesize(
 
 ## Model
 
-The script uses the `en_US-amy-low.onnx` model located in the `tts_models/` directory. You can download additional Piper TTS models from the [Piper repository](https://github.com/rhasspy/piper).
+The script uses the `jarvis-medium.onnx` model located in the `tts_models/` directory. You can download additional Piper TTS models from the [Piper repository](https://github.com/rhasspy/piper).
 
 ## Parameters
 
 - `text`: The text to convert to speech
 - `output_path`: Path where the WAV file will be saved (default: "output/speech.wav")
-- `model_path`: Path to the ONNX model file (default: "tts_models/en_US-amy-low.onnx")
+- `model_path`: Path to the ONNX model file (default: "tts_models/jarvis-medium.onnx")
 
 ## Output
 

@@ -6,13 +6,49 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import sounddevice as sd
 import scipy.io.wavfile as wavfile
 
 from speak_bot.record_audio import record_audio_until_silence
 from speak_bot.speech_to_text import transcribe_audio
-from speak_bot.llm_response import LLMResponseGenerator
-from speak_bot.text_to_speech import text_to_speech
+from speak_bot.mcp_client import LLMResponseGenerator
+from speak_bot.text_to_speech import text_to_speech, text_to_speech_direct, text_to_speech_streaming
+
+
+
+def get_package_root() -> Path:
+    """Get the root directory of the speak_bot package."""
+    return Path(__file__).parent.parent
+
+
+def resolve_tts_model_path(model_path: str) -> str:
+    """Resolve TTS model path to absolute path if it's a relative path.
+    
+    Args:
+        model_path: Path to TTS model (relative or absolute)
+        
+    Returns:
+        Absolute path to TTS model
+    """
+    path = Path(model_path)
+    if path.is_absolute():
+        return str(path)
+    
+    # If it's a relative path starting with "tts_models/", 
+    # resolve it relative to the package root
+    if model_path.startswith("tts_models/"):
+        package_root = get_package_root()
+        absolute_path = package_root / model_path
+        if absolute_path.exists():
+            return str(absolute_path)
+    
+    # If the file exists in the current directory, use it
+    if path.exists():
+        return str(path.absolute())
+    
+    # Otherwise, return the original path (let it fail with a clear error)
+    return model_path
 
 
 def play_audio(wav_file: str, verbose: bool = True):
@@ -36,54 +72,148 @@ def play_audio(wav_file: str, verbose: bool = True):
         print("Audio playback complete.")
 
 
+def play_audio_streaming(
+    text: str, 
+    model_path: str, 
+    use_cuda: bool = True, 
+    verbose: bool = True
+):
+    """Convert text to speech and play with streaming synthesis and playback.
+    
+    This function starts playing audio immediately as synthesis progresses,
+    providing much lower latency than batch processing.
+    
+    Args:
+        text: The text to synthesize and play
+        model_path: Path to the Piper TTS model file
+        use_cuda: Whether to use GPU acceleration
+        verbose: If True, print status messages
+    """
+    if verbose:
+        print(f"Streaming TTS: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+    
+    try:
+        # Use streaming synthesis and playback
+        text_to_speech_streaming(
+            text=text,
+            model_path=model_path,
+            use_cuda=use_cuda,
+            verbose=verbose
+        )
+            
+    except Exception as e:
+        if verbose:
+            print(f"Streaming TTS failed, falling back to direct playback: {e}")
+        
+        # Fallback to direct (non-streaming) playback
+        play_audio_direct(text, model_path, use_cuda, verbose)
+
+
+def play_audio_direct(
+    text: str, 
+    model_path: str, 
+    use_cuda: bool = True, 
+    verbose: bool = True
+):
+    """Convert text to speech and play directly without saving to file.
+    
+    Args:
+        text: The text to synthesize and play
+        model_path: Path to the Piper TTS model file
+        use_cuda: Whether to use GPU acceleration
+        verbose: If True, print status messages
+    """
+    if verbose:
+        print(f"Converting text to speech and playing: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+    
+    try:
+        # Generate audio data directly in memory
+        audio_data, sample_rate = text_to_speech_direct(
+            text=text,
+            model_path=model_path,
+            use_cuda=use_cuda,
+            verbose=verbose
+        )
+        
+        if len(audio_data) == 0:
+            if verbose:
+                print("No audio generated - skipping playback")
+            return
+        
+        # Play the audio directly from memory
+        if verbose:
+            print("Playing audio...")
+        sd.play(audio_data, sample_rate)
+        sd.wait()
+        
+        if verbose:
+            print("Audio playback complete.")
+            
+    except Exception as e:
+        print(f"Error in direct TTS playback: {e}")
+        raise
+
+
 def run_voice_to_text(
+    llm: LLMResponseGenerator | None = None,
     output_dir: str = "transcriptions",
-    model_name: str = "base",
+    model_name: str = "tiny",
     samplerate: int = 16000,
     silence_seconds: float = 2.0,
     silence_threshold: int = 1500,
+    timeout_seconds: float | None = None,
     language: str | None = None,
     use_llm: bool = False,
     llm_model: str = "gpt-4o-mini",
     llm_stream: bool = False,
     history: list[dict[str, str]] | None = None,
     use_tts: bool = False,
-    tts_model: str = "tts_models/en_US-amy-low.onnx",
-) -> tuple[str, str, bool, str]:
+    tts_model: str = "tts_models/jarvis-medium.onnx",
+) -> tuple[str, str, bool, str, bool, str | None]:
     """Record audio from mic and transcribe to text, optionally process with LLM.
     
     Args:
         output_dir: Directory to save transcription files
-        model_name: Whisper model size (tiny, base, small, medium, large)
+        model_name: faster-whisper model size (tiny, base, small, medium, large)
         samplerate: Sample rate in Hz
         silence_seconds: Stop after this many seconds of silence
         silence_threshold: Amplitude threshold for silence
+        timeout_seconds: Auto-terminate after this many seconds of no voice activity
         language: Language code for transcription
         use_llm: If True, process transcription with LLM
         llm_model: OpenAI model to use for LLM
         llm_stream: If True, stream the LLM response
+        history: Previous conversation history for context
         use_tts: If True, convert LLM response to speech and play it
-        tts_model: Path to the TTS ONNX model
+        tts_model: Path to TTS model file
     
     Returns:
-        tuple: (transcribed_text, output_file_path, user_exit, assistant_response)
+        tuple: (transcribed_text, output_file_path, user_exit, assistant_response, timeout_exit, tool_signal)
     """
     # Step 1: Record audio from microphone
     print("=== Step 1: Recording Audio ===")
-    audio_data, actual_samplerate, user_exit = record_audio_until_silence(
+    audio_data, actual_samplerate, user_exit, timeout_exit = record_audio_until_silence(
         samplerate=samplerate,
         channels=1,
         silence_seconds=silence_seconds,
         silence_threshold=silence_threshold,
+        timeout_seconds=timeout_seconds,
         verbose=True,
     )
 
     if user_exit:
         print("User requested exit during recording. Stopping loop.")
-        return "", "", True, ""
-    if audio_data.size == 0:
-        print("No audio captured. Will retry.")
-        return "", "", False, ""
+        return "", "", True, "", False, None
+    if timeout_exit:
+        print("Auto-termination: No voice activity detected.")
+        return "", "", True, "", False, None
+    
+    if timeout_exit:
+        print("Auto-termination: No voice activity detected.")
+        return "", "", False, "", True, None
+    
+    if not audio_data.size:
+        return "", "", False, "", False, None
     
     # Step 2: Transcribe audio to text
     print("\n=== Step 2: Transcribing Audio ===")
@@ -111,46 +241,57 @@ def run_voice_to_text(
     
     # Step 4 (Optional): Process with LLM
     assistant_response = ""
-    if use_llm:
+    tool_signal = None
+    
+    if use_llm and llm:
         print("\n=== Step 4: Processing with LLM ===")
         try:
-            llm = LLMResponseGenerator(model=llm_model)
             if llm_stream:
                 print("LLM Response (streaming):")
-                for chunk in llm.get_response(text, stream=True, history=history):
-                    print(chunk, end="", flush=True)
-                    assistant_response += chunk
+                assistant_response = ""
+                # Note: Streaming doesn't support control signals yet
+                response_content = llm.get_response(text, stream=True, history=history)
+                if isinstance(response_content, str):
+                    assistant_response = response_content
+                    print(assistant_response)
+                else:
+                    for chunk in response_content:
+                        if chunk:  # Check if chunk is not None
+                            print(chunk, end="", flush=True)
+                            assistant_response += chunk
                 print()
             else:
-                assistant_response = llm.get_response(
-                    text, stream=False, history=history
-                )
+                # Get response with control signal
+                response_data = llm.get_response(text, stream=False, history=history, return_control_signal=True)
+                if isinstance(response_data, tuple):
+                    assistant_response, tool_signal = response_data
+                else:
+                    assistant_response = str(response_data)
+                    tool_signal = None
+                    
                 print("LLM Response:")
                 print(assistant_response)
         except Exception as e:
             print(f"Error processing with LLM: {e}")
-        
-        # Step 5 (Optional): Convert LLM response to speech and play it
-        if use_tts and assistant_response:
-            print("\n=== Step 5: Converting Response to Speech ===")
-            try:
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                tts_output = f"output/tts_response_{timestamp}.wav"
-                
-                # Generate speech from LLM response
-                text_to_speech(
-                    text=assistant_response,
-                    output_file=tts_output,
-                    model_path=tts_model,
-                    verbose=True
-                )
-                
-                # Play the audio
-                play_audio(tts_output, verbose=True)
-            except Exception as e:
-                print(f"Error with TTS: {e}")
+    elif use_llm and not llm:
+        print("Warning: LLM processing requested but no LLM instance provided")
 
-    return text, str(text_file), False, assistant_response
+    # Step 5 (Optional): Convert LLM response to speech and play it
+    if use_tts and assistant_response and isinstance(assistant_response, str):
+        print("\n=== Step 5: Converting Response to Speech ===")
+        try:
+            # Generate and play speech with streaming synthesis and playback
+            resolved_tts_model = resolve_tts_model_path(tts_model)
+            play_audio_streaming(
+                text=assistant_response,
+                model_path=resolved_tts_model,
+                use_cuda=True,
+                verbose=True
+            )
+        except Exception as e:
+            print(f"Error with TTS: {e}")
+
+    return text, str(text_file), False, str(assistant_response), False, tool_signal
 
 
 def parse_args():
@@ -166,9 +307,9 @@ def parse_args():
     parser.add_argument(
         "-m",
         "--model",
-        default="base",
+        default="tiny",
         choices=["tiny", "base", "small", "medium", "large"],
-        help="Whisper model size (default: base)",
+        help="faster-whisper model size (default: tiny)",
     )
     parser.add_argument(
         "-r",
@@ -217,8 +358,14 @@ def parse_args():
     )
     parser.add_argument(
         "--tts-model",
-        default="tts_models/en_US-amy-low.onnx",
-        help="Path to TTS ONNX model (default: tts_models/en_US-amy-low.onnx)",
+        default="tts_models/jarvis-medium.onnx",
+        help="Path to TTS ONNX model (default: tts_models/jarvis-medium.onnx)",
+    )
+    parser.add_argument(
+        "--timeout-seconds",
+        type=float,
+        default=None,
+        help="Auto-terminate after this many seconds of no voice activity (default: disabled)",
     )
     parser.add_argument(
         "--loop",
@@ -230,14 +377,44 @@ def parse_args():
 
 def run_conversation(args):
     print("Conversation loop started. Press 'q' then Enter during recording to exit.")
+    if args.timeout_seconds:
+        print(f"Auto-termination enabled: Will exit after {args.timeout_seconds}s of no voice activity.")
     history: list[dict[str, str]] = []
+
+    # Initialize LLM with MCP server connection
+    llm = LLMResponseGenerator(model=args.llm_model)
+    
+    # Auto-start MCP server connection
+    mcp_connected = False
+    try:
+        from pathlib import Path
+        import logging
+        
+        # Set up logging to see MCP connection details
+        logging.basicConfig(level=logging.INFO)
+        
+        mcp_server_path = Path(__file__).parent / "mcp" / "mcp_server.py"
+        
+        print(f"🔌 Connecting to MCP server at: {mcp_server_path}")
+        llm.connect_to_server(str(mcp_server_path))
+        mcp_connected = True
+        print("✅ MCP server connected for conversation control.")
+        print("   You can now say 'goodbye' or 'stop' to end the conversation.")
+    except Exception as e:
+        print(f"⚠️  MCP server connection failed: {e}")
+        print("   Conversation will continue without voice stop functionality.")
+        print("   You can still press 'q' + Enter during recording to exit.")
+        # Don't exit, continue with fallback mode
+    
     while True:
-        text, _, user_exit, assistant_response = run_voice_to_text(
+        text, _, user_exit, assistant_response, timeout_exit, tool_signal = run_voice_to_text(
+            llm=llm,
             output_dir=args.output_dir,
             model_name=args.model,
             samplerate=args.samplerate,
             silence_seconds=args.silence_seconds,
             silence_threshold=args.silence_threshold,
+            timeout_seconds=args.timeout_seconds,
             language=args.language,
             use_llm=args.use_llm,
             llm_model=args.llm_model,
@@ -247,12 +424,22 @@ def run_conversation(args):
             tts_model=args.tts_model,
         )
 
+        # Check all exit conditions
         if user_exit:
             print("Exiting conversation loop.")
             sys.exit(0)
+        
+        if timeout_exit:
+            print("Auto-termination activated. Exiting conversation loop.")
+            sys.exit(0)
+            
+        # NEW: Check for tool-initiated stop
+        if tool_signal == "stop_conversation":
+            print("Conversation ended by assistant.")
+            sys.exit(0)
 
+        # Update conversation history
         if args.use_llm and text:
-            # Update conversation history
             history.append({"role": "user", "content": text})
             if assistant_response:
                 history.append({"role": "assistant", "content": assistant_response})
@@ -269,6 +456,7 @@ def main():
             samplerate=args.samplerate,
             silence_seconds=args.silence_seconds,
             silence_threshold=args.silence_threshold,
+            timeout_seconds=args.timeout_seconds,
             language=args.language,
             use_llm=args.use_llm,
             llm_model=args.llm_model,

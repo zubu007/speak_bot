@@ -4,7 +4,7 @@ This document collects the hard and soft rules that every agent working in this 
 
 ## Purpose
 
-- The repo builds a voice-first assistant pipeline combining mic capture, Whisper transcription, optional LLM enrichment, and Piper-powered speech synthesis.
+- The repo builds a voice-first assistant pipeline combining mic capture, faster-whisper transcription, optional LLM enrichment, and Piper-powered speech synthesis.
 - Existing scripts live as lightweight CLI entry points; agents should treat them as sequential stages with clearly defined inputs/outputs.
 - Because the user base is CLI, every change should favor reliability, meaningful console feedback, and audio artifacts stored under `transcriptions/` or `output/`.
 
@@ -12,7 +12,7 @@ This document collects the hard and soft rules that every agent working in this 
 
 - `main.py` orchestrates the end-to-end loop, exposing arguments for every recording/transcription/LLM/TTS knob.
 - `record_audio.py` handles silence-based recording and exposes reusable helpers such as `record_audio_until_silence` + `save_audio_to_wav`.
-- `speech_to_text.py` and `text_to_speech.py` wrap Whisper and Piper respectively for batch/CLI usage.
+- `speech_to_text.py` and `text_to_speech.py` wrap faster-whisper and Piper respectively for batch/CLI usage.
 - Model weights and sample outputs live in `tts_models/` and `output/`; transcriptions are written to `transcriptions/` with timestamped filenames.
 
 ## Cursor & Copilot Rules
@@ -35,7 +35,7 @@ This document collects the hard and soft rules that every agent working in this 
 ### Standalone Module Commands
 
 - `python record_audio.py --output recording.wav` – records voice until silence and writes a WAV, useful for validating recording options independently.
-- `python speech_to_text.py test.wav --model base` – transcribes a WAV file and either prints the text or saves it via `-o`. This is the reference command for working on transcription logic and serves as the “single test” run.
+- `python speech_to_text.py test.wav --model tiny` – transcribes a WAV file and either prints the text or saves it via `-o`. This is the reference command for working on transcription logic and serves as the “single test” run.
 - `python text_to_speech.py "Hello from Piper"` – exercises the Piper TTS wrapper.
 
 ### Testing Guidance
@@ -108,7 +108,7 @@ This document collects the hard and soft rules that every agent working in this 
 ### Dependencies
 
 - `pyproject.toml` is authoritative. Add new packages there with version constraints. After adding, rerun `pip install .` to regenerate the lock file (if using one).
-- Keep the dependency list minimal; prefer standard libs plus Whisper, Piper, SoundDevice, NumPy/SciPy, OpenAI, and python-dotenv.
+- Keep the dependency list minimal; prefer standard libs plus faster-whisper, Piper, SoundDevice, NumPy/SciPy, OpenAI, and python-dotenv.
 
 ## Workflow Suggestions
 
@@ -126,14 +126,14 @@ This document collects the hard and soft rules that every agent working in this 
 ## Manual Verification Checklist
 
 - Record a short clip using `python record_audio.py --output recording.wav` to verify microphone, silence thresholds, and file writing behavior.
-- Transcribe the clip with `python speech_to_text.py recording.wav` to ensure Whisper integration and language defaults behave as expected.
+- Transcribe the clip with `python speech_to_text.py recording.wav` to ensure faster-whisper integration and language defaults behave as expected.
 - Optionally run `python text_to_speech.py "Testing TTS" -o output/test_tts.wav` to ensure Piper still saves good audio and playback works without crashes.
 - When changing the loop logic, run `python main.py --loop --use-llm` and simulate pressing `q` during recording to confirm exit handling is still reliable.
 
 ## PR & Documentation Notes
 
 - Document any new dependencies or CLI arguments in `README.md` or `TTS_README.md` so future agents can find the same instructions.
-- List manual verification commands you ran in the PR description (e.g., `python speech_to_text.py test.wav --model base`).
+- List manual verification commands you ran in the PR description (e.g., `python speech_to_text.py test.wav --model tiny`).
 - Avoid committing `.env`, `uv.lock`, or other environment-specific artifacts unless the change strictly requires it; mention why in the PR if you must.
 
 ## References

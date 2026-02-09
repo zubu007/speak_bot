@@ -2,6 +2,7 @@ import argparse
 import queue
 import sys
 import threading
+import time
 import wave
 
 import numpy as np
@@ -14,18 +15,28 @@ def record_audio_until_silence(
     blocksize: int = 2048,
     silence_seconds: float = 2.0,
     silence_threshold: int = 1500,
+    timeout_seconds: float | None = None,
     verbose: bool = True,
-) -> tuple[np.ndarray, int, bool]:
+) -> tuple[np.ndarray, int, bool, bool]:
     """Record audio from microphone until silence is detected.
     
+    Args:
+        timeout_seconds: If specified, automatically terminate after this many
+                        seconds of no voice activity (regardless of silence detection)
+    
     Returns:
-        tuple: (audio_data as int16 numpy array, samplerate, user_exit)
+        tuple: (audio_data as int16 numpy array, samplerate, user_exit, timeout_exit)
     """
     q: queue.Queue[np.ndarray] = queue.Queue()
     chunks = []
 
     stop_event = threading.Event()
     user_exit = False
+    timeout_exit = False
+    
+    # Track timing for timeout detection
+    start_time = time.time()
+    last_activity_time = start_time
 
     def callback(indata, frames, time_info, status):
         if status and verbose:
@@ -53,6 +64,8 @@ def record_audio_until_silence(
         print(
             f"Recording... stop after {silence_seconds}s of silence (threshold={silence_threshold})."
         )
+        if timeout_seconds:
+            print(f"Auto-termination after {timeout_seconds}s of no voice activity.")
         print("Press 'q' then Enter to stop recording and exit.")
 
     try:
@@ -67,6 +80,14 @@ def record_audio_until_silence(
                 if stop_event.is_set():
                     break
 
+                # Check for timeout if enabled
+                current_time = time.time()
+                if timeout_seconds and (current_time - last_activity_time) >= timeout_seconds:
+                    timeout_exit = True
+                    if verbose:
+                        print(f"\nAuto-termination: No voice detected for {timeout_seconds}s")
+                    break
+
                 try:
                     chunk = q.get(timeout=0.1)
                 except queue.Empty:
@@ -77,6 +98,8 @@ def record_audio_until_silence(
                 if amp > silence_threshold:
                     activity_started = True
                     silent_frames = 0
+                    # Update last activity time when voice is detected
+                    last_activity_time = current_time
                 else:
                     if activity_started:
                         silent_frames += chunk.shape[0]
@@ -95,7 +118,7 @@ def record_audio_until_silence(
         audio_data = np.zeros((0, channels), dtype=np.int16)
     if verbose:
         print(f"Recording complete: {len(audio_data)} frames")
-    return audio_data, samplerate, user_exit
+    return audio_data, samplerate, user_exit, timeout_exit
 
 
 def save_audio_to_wav(audio_data: np.ndarray, samplerate: int, output_path: str, channels: int = 1):
@@ -147,7 +170,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-    audio_data, samplerate, user_exit = record_audio_until_silence(
+    audio_data, samplerate, user_exit, timeout_exit = record_audio_until_silence(
         samplerate=args.samplerate,
         channels=args.channels,
         silence_seconds=args.silence_seconds,
@@ -155,6 +178,9 @@ def main():
     )
     if user_exit:
         print("Recording stopped by user.")
+        return
+    if timeout_exit:
+        print("Recording stopped due to timeout.")
         return
     save_audio_to_wav(audio_data, samplerate, args.output, args.channels)
 

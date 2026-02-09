@@ -3,16 +3,21 @@ name = "speak-bot"
 version = "0.1.0"
 description = "A voice-first assistant pipeline."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24.0",
     "sounddevice>=0.4.6",
-    "openai-whisper",
+    "faster-whisper>=1.2.0",
     "scipy>=1.10.0",
     "openai>=1.0.0",
     "python-dotenv>=1.0.0",
     "piper-tts>=1.2.0",
+    "mcp[cli]",
+    "httpx",
 ]
+
+[project.scripts]
+talk = "speak_bot.main:main"
 
 [tool.setuptools]
 packages = ["speak_bot"]
