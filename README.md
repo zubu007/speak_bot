@@ -231,7 +231,7 @@ Key features:
 
 ## Plans for future improvements:
 - ✅ JARVIS-like wake word detection (implemented in wake_word project)
-- ✅ Conversation history for context-aware responses (implemented)
+- ⏳ Persistant Conversation history for context-aware responses (implemented)
 - ⏳ Add Google Calendar integration for scheduling via voice commands
 - ⏳ Add email reading and management tools
 - ⏳ Create a C++ version for performance optimization
