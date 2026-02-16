@@ -75,7 +75,8 @@ def play_audio(wav_file: str, verbose: bool = True):
 def play_audio_streaming(
     text: str, 
     model_path: str, 
-    use_cuda: bool = True, 
+    use_cuda: bool = False,
+    use_cache: bool = True,
     verbose: bool = True
 ):
     """Convert text to speech and play with streaming synthesis and playback.
@@ -86,7 +87,8 @@ def play_audio_streaming(
     Args:
         text: The text to synthesize and play
         model_path: Path to the Piper TTS model file
-        use_cuda: Whether to use GPU acceleration
+        use_cuda: Whether to use GPU acceleration (not used on Apple Silicon)
+        use_cache: Use cached voice model if available (recommended for performance)
         verbose: If True, print status messages
     """
     if verbose:
@@ -98,6 +100,7 @@ def play_audio_streaming(
             text=text,
             model_path=model_path,
             use_cuda=use_cuda,
+            use_cache=use_cache,
             verbose=verbose
         )
             
@@ -106,13 +109,14 @@ def play_audio_streaming(
             print(f"Streaming TTS failed, falling back to direct playback: {e}")
         
         # Fallback to direct (non-streaming) playback
-        play_audio_direct(text, model_path, use_cuda, verbose)
+        play_audio_direct(text, model_path, use_cuda, use_cache, verbose)
 
 
 def play_audio_direct(
     text: str, 
     model_path: str, 
-    use_cuda: bool = True, 
+    use_cuda: bool = False,
+    use_cache: bool = True,
     verbose: bool = True
 ):
     """Convert text to speech and play directly without saving to file.
@@ -120,7 +124,8 @@ def play_audio_direct(
     Args:
         text: The text to synthesize and play
         model_path: Path to the Piper TTS model file
-        use_cuda: Whether to use GPU acceleration
+        use_cuda: Whether to use GPU acceleration (not used on Apple Silicon)
+        use_cache: Use cached voice model if available (recommended for performance)
         verbose: If True, print status messages
     """
     if verbose:
@@ -132,6 +137,7 @@ def play_audio_direct(
             text=text,
             model_path=model_path,
             use_cuda=use_cuda,
+            use_cache=use_cache,
             verbose=verbose
         )
         
@@ -157,12 +163,15 @@ def play_audio_direct(
 def run_voice_to_text(
     llm: LLMResponseGenerator | None = None,
     output_dir: str = "transcriptions",
-    model_name: str = "tiny",
+    model_name: str = "tiny.en",
     samplerate: int = 16000,
     silence_seconds: float = 2.0,
     silence_threshold: int = 1500,
     timeout_seconds: float | None = None,
-    language: str | None = None,
+    language: str | None = "en",
+    device: str = "cpu",
+    compute_type: str = "int8",
+    use_model_cache: bool = True,
     use_llm: bool = False,
     llm_model: str = "gpt-4o-mini",
     llm_stream: bool = False,
@@ -174,12 +183,15 @@ def run_voice_to_text(
     
     Args:
         output_dir: Directory to save transcription files
-        model_name: faster-whisper model size (tiny, base, small, medium, large)
+        model_name: faster-whisper model size (tiny, tiny.en, base, small, medium, large)
         samplerate: Sample rate in Hz
         silence_seconds: Stop after this many seconds of silence
         silence_threshold: Amplitude threshold for silence
         timeout_seconds: Auto-terminate after this many seconds of no voice activity
-        language: Language code for transcription
+        language: Language code for transcription (default: en)
+        device: Device for Whisper model (cpu or cuda). Apple Silicon uses cpu with Core ML.
+        compute_type: Compute precision for Whisper (int8, float16, float32)
+        use_model_cache: Use cached models for better performance (recommended)
         use_llm: If True, process transcription with LLM
         llm_model: OpenAI model to use for LLM
         llm_stream: If True, stream the LLM response
@@ -222,6 +234,9 @@ def run_voice_to_text(
         actual_samplerate,
         model_name=model_name,
         language=language,
+        device=device,
+        compute_type=compute_type,
+        use_cache=use_model_cache,
         verbose=True,
     )
     
@@ -277,7 +292,8 @@ def run_voice_to_text(
         print("Warning: LLM processing requested but no LLM instance provided")
 
     # Step 5 (Optional): Convert LLM response to speech and play it
-    if use_tts and assistant_response and isinstance(assistant_response, str):
+    # Skip TTS if we're stopping (tool already played goodbye message)
+    if use_tts and assistant_response and isinstance(assistant_response, str) and tool_signal != "stop_conversation":
         print("\n=== Step 5: Converting Response to Speech ===")
         try:
             # Generate and play speech with streaming synthesis and playback
@@ -285,7 +301,8 @@ def run_voice_to_text(
             play_audio_streaming(
                 text=assistant_response,
                 model_path=resolved_tts_model,
-                use_cuda=True,
+                use_cuda=False,  # Apple Silicon doesn't use CUDA
+                use_cache=use_model_cache,
                 verbose=True
             )
         except Exception as e:
@@ -307,9 +324,9 @@ def parse_args():
     parser.add_argument(
         "-m",
         "--model",
-        default="tiny",
-        choices=["tiny", "base", "small", "medium", "large"],
-        help="faster-whisper model size (default: tiny)",
+        default="tiny.en",
+        choices=["tiny", "tiny.en", "base", "base.en", "small", "small.en", "medium", "medium.en", "large"],
+        help="faster-whisper model size (default: tiny.en for faster English-only)",
     )
     parser.add_argument(
         "-r",
@@ -333,8 +350,8 @@ def parse_args():
     parser.add_argument(
         "-l",
         "--language",
-        default=None,
-        help="Language code (e.g., 'en', 'es'). Auto-detect if omitted.",
+        default="en",
+        help="Language code (e.g., 'en', 'es'). Default: en",
     )
     parser.add_argument(
         "--use-llm",
@@ -372,6 +389,23 @@ def parse_args():
         action="store_true",
         help="Keep recording in a conversation loop until 'q' + Enter is pressed",
     )
+    parser.add_argument(
+        "--device",
+        default="cpu",
+        choices=["cpu", "cuda"],
+        help="Device for Whisper model (default: cpu, uses Core ML on Apple Silicon)",
+    )
+    parser.add_argument(
+        "--compute-type",
+        default="int8",
+        choices=["int8", "float16", "float32"],
+        help="Compute type for Whisper (default: int8, good for Apple Silicon)",
+    )
+    parser.add_argument(
+        "--no-model-cache",
+        action="store_true",
+        help="Disable model caching (default: caching enabled for better performance)",
+    )
     return parser.parse_args()
 
 
@@ -379,6 +413,28 @@ def run_conversation(args):
     print("Conversation loop started. Press 'q' then Enter during recording to exit.")
     if args.timeout_seconds:
         print(f"Auto-termination enabled: Will exit after {args.timeout_seconds}s of no voice activity.")
+    
+    # Pre-load models for better performance (only if caching is enabled)
+    if not args.no_model_cache:
+        print("\n=== Pre-loading Models for Better Performance ===")
+        print("Loading Whisper model (this may take a few seconds)...")
+        from speak_bot.speech_to_text import WhisperModelCache
+        WhisperModelCache.get_model(
+            model_name=args.model,
+            device=args.device,
+            compute_type=args.compute_type
+        )
+        print("✓ Whisper model loaded and cached")
+        
+        if args.use_tts:
+            print("Loading TTS voice model...")
+            from speak_bot.text_to_speech import PiperVoiceCache
+            resolved_tts = resolve_tts_model_path(args.tts_model)
+            PiperVoiceCache.get_voice(model_path=resolved_tts, use_cuda=False)
+            print("✓ TTS voice loaded and cached")
+        
+        print("=== Models Ready - Starting Conversation ===\n")
+    
     history: list[dict[str, str]] = []
 
     # Initialize LLM with MCP server connection
@@ -416,6 +472,9 @@ def run_conversation(args):
             silence_threshold=args.silence_threshold,
             timeout_seconds=args.timeout_seconds,
             language=args.language,
+            device=args.device,
+            compute_type=args.compute_type,
+            use_model_cache=not args.no_model_cache,
             use_llm=args.use_llm,
             llm_model=args.llm_model,
             llm_stream=args.llm_stream,
@@ -458,6 +517,9 @@ def main():
             silence_threshold=args.silence_threshold,
             timeout_seconds=args.timeout_seconds,
             language=args.language,
+            device=args.device,
+            compute_type=args.compute_type,
+            use_model_cache=not args.no_model_cache,
             use_llm=args.use_llm,
             llm_model=args.llm_model,
             llm_stream=args.llm_stream,

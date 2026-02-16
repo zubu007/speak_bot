@@ -9,11 +9,49 @@ import sounddevice as sd
 from piper import PiperVoice
 
 
+class PiperVoiceCache:
+    """Singleton cache for Piper TTS voices to avoid reloading.
+    
+    This significantly improves performance by keeping voice models in memory
+    across multiple synthesis requests. First load takes normal time,
+    subsequent loads are instant.
+    """
+    _voices: dict[str, PiperVoice] = {}
+    
+    @classmethod
+    def get_voice(
+        cls,
+        model_path: str = "tts_models/jarvis-medium.onnx",
+        use_cuda: bool = False  # Apple Silicon doesn't use CUDA
+    ) -> PiperVoice:
+        """Get a cached Piper voice or create a new one.
+        
+        Args:
+            model_path: Path to the Piper TTS model file
+            use_cuda: Whether to use CUDA acceleration (not used on Apple Silicon)
+            
+        Returns:
+            Cached or newly created PiperVoice instance
+        """
+        cache_key = f"{model_path}_{use_cuda}"
+        if cache_key not in cls._voices:
+            print(f"Loading Piper voice: {model_path}")
+            cls._voices[cache_key] = PiperVoice.load(model_path, use_cuda=use_cuda)
+            print("✓ Piper voice loaded and cached")
+        return cls._voices[cache_key]
+    
+    @classmethod
+    def clear_cache(cls):
+        """Clear all cached voices to free memory."""
+        cls._voices.clear()
+
+
 def text_to_speech(
     text: str,
     output_file: str,
     model_path: str = "tts_models/jarvis-medium.onnx",
-    use_cuda: bool = True,
+    use_cuda: bool = False,
+    use_cache: bool = True,
     verbose: bool = True,
 ) -> None:
     """Convert text to speech and save as a WAV file using Piper TTS.
@@ -22,13 +60,18 @@ def text_to_speech(
         text: The text to synthesize
         output_file: Path where the WAV file will be saved
         model_path: Path to the Piper TTS model file
-        use_cuda: Whether to use GPU acceleration
+        use_cuda: Whether to use GPU acceleration (not used on Apple Silicon)
+        use_cache: Use cached voice model if available (recommended for performance)
         verbose: If True, print status messages
     """
     if verbose:
         print(f"Loading Piper TTS model from: {model_path}")
     
-    voice = PiperVoice.load(model_path, use_cuda=use_cuda)
+    # Use cached voice if enabled (recommended for performance)
+    if use_cache:
+        voice = PiperVoiceCache.get_voice(model_path, use_cuda)
+    else:
+        voice = PiperVoice.load(model_path, use_cuda=use_cuda)
     
     # Create output directory if it doesn't exist
     output_path = Path(output_file)
@@ -47,7 +90,8 @@ def text_to_speech(
 def text_to_speech_streaming(
     text: str,
     model_path: str = "tts_models/jarvis-medium.onnx",
-    use_cuda: bool = True,
+    use_cuda: bool = False,
+    use_cache: bool = True,
     verbose: bool = True,
 ) -> None:
     """Convert text to speech with streaming synthesis and playback using Piper TTS.
@@ -59,13 +103,18 @@ def text_to_speech_streaming(
     Args:
         text: The text to synthesize
         model_path: Path to the Piper TTS model file
-        use_cuda: Whether to use GPU acceleration
+        use_cuda: Whether to use GPU acceleration (not used on Apple Silicon)
+        use_cache: Use cached voice model if available (recommended for performance)
         verbose: If True, print status messages
     """
     if verbose:
         print(f"Loading Piper TTS model from: {model_path}")
     
-    voice = PiperVoice.load(model_path, use_cuda=use_cuda)
+    # Use cached voice if enabled (recommended for performance)
+    if use_cache:
+        voice = PiperVoiceCache.get_voice(model_path, use_cuda)
+    else:
+        voice = PiperVoice.load(model_path, use_cuda=use_cuda)
     
     if verbose:
         print(f"Streaming synthesis: '{text[:50]}{'...' if len(text) > 50 else ''}'")
@@ -213,7 +262,8 @@ def text_to_speech_streaming(
 def text_to_speech_direct(
     text: str,
     model_path: str = "tts_models/jarvis-medium.onnx",
-    use_cuda: bool = True,
+    use_cuda: bool = False,
+    use_cache: bool = True,
     verbose: bool = True,
 ) -> tuple[np.ndarray, int]:
     """Convert text to speech and return audio data in memory using Piper TTS.
@@ -221,7 +271,8 @@ def text_to_speech_direct(
     Args:
         text: The text to synthesize
         model_path: Path to the Piper TTS model file
-        use_cuda: Whether to use GPU acceleration
+        use_cuda: Whether to use GPU acceleration (not used on Apple Silicon)
+        use_cache: Use cached voice model if available (recommended for performance)
         verbose: If True, print status messages
     
     Returns:
@@ -230,7 +281,11 @@ def text_to_speech_direct(
     if verbose:
         print(f"Loading Piper TTS model from: {model_path}")
     
-    voice = PiperVoice.load(model_path, use_cuda=use_cuda)
+    # Use cached voice if enabled (recommended for performance)
+    if use_cache:
+        voice = PiperVoiceCache.get_voice(model_path, use_cuda)
+    else:
+        voice = PiperVoice.load(model_path, use_cuda=use_cuda)
     
     if verbose:
         print(f"Synthesizing speech: '{text[:50]}{'...' if len(text) > 50 else ''}'")
